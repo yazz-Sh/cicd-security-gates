@@ -59,6 +59,8 @@ powershell -File scripts\scan-local.ps1               # mêmes contrôles que la
 ## Documentation
 
 - [Rapport de projet](docs/RAPPORT.md) : analyse as-is / to-be, choix des outils, seuils, résultats
+- [Project report (English)](docs/REPORT_EN.md)
+- [Captures d'écran](docs/captures/)
 - [Procédure de dérogation](docs/PROCEDURE_DEROGATION.md)
 - [Préparation à l'oral](docs/PREPARATION_ORAL.md)
 - [Politique de quality gates](security/policy.yml) · [Registre des dérogations](security/exemptions.yml)
