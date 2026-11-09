@@ -5,3 +5,8 @@ reports/
 infra/.env
 .pytest_cache/
 .coverage
+# Guides de demonstration personnels (gardes hors du depot)
+docs/GUIDE_DEMO.md
+docs/DEMO_GUIDE_EN.md
+docs/export/Guide_Demo_*
+docs/export/Demo_Guide_*
