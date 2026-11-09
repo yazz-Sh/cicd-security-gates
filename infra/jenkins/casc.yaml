@@ -43,18 +43,18 @@ unclassified:
 
 jobs:
   - script: |
-      def mk = { String name, String branch, String file, String desc ->
-        pipelineJob(name) {
+      def mk = { String jobName, String gitBranch, String jenkinsfile, String desc ->
+        pipelineJob(jobName) {
           description(desc)
           definition {
             cpsScm {
               scm {
                 git {
                   remote { url('file:///repo') }
-                  branch(branch)
+                  branch(gitBranch)
                 }
               }
-              scriptPath(file)
+              scriptPath(jenkinsfile)
               lightweight(false)
             }
           }
