@@ -264,10 +264,36 @@ td,th{{border:1px solid #ddd;padding:6px;text-align:left;vertical-align:top}}th{
     (out / "security-gate.html").write_text(page, encoding="utf-8")
 
 
+def filter_sarif(tool, src, dst, exemptions_raw):
+    """Copie un rapport SARIF sans les resultats couverts par une derogation active.
+    Le registre des derogations reste ainsi la SOURCE UNIQUE de verite, y compris
+    pour SonarQube (qui importe les SARIF)."""
+    active, _ = valid_exemptions(exemptions_raw, dt.date.today())
+    data = json.loads(Path(src).read_text(encoding="utf-8"))
+    removed = 0
+    for run in data.get("runs", []):
+        kept = []
+        for r in run.get("results", []):
+            loc = r.get("locations", [{}])[0].get("physicalLocation", {})
+            location = f"{loc.get('artifactLocation', {}).get('uri')}:{loc.get('region', {}).get('startLine')}"
+            sha = (r.get("partialFingerprints") or {}).get("commitSha")
+            if sha:
+                location += f" (commit {sha[:8]})"
+            if any(e["tool"] == tool and str(e["rule"]) == r.get("ruleId") and e.get("location", "") in location for e in active):
+                removed += 1
+            else:
+                kept.append(r)
+        run["results"] = kept
+    Path(dst).write_text(json.dumps(data), encoding="utf-8")
+    print(f"{src} -> {dst} : {removed} resultat(s) sous derogation retires")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["check", "evaluate"])
+    ap.add_argument("command", choices=["check", "evaluate", "filter-sarif"])
     ap.add_argument("--tool", choices=list(REPORT_FILES))
+    ap.add_argument("--src")
+    ap.add_argument("--dst")
     ap.add_argument("--reports", default="reports")
     ap.add_argument("--policy", default="security/policy.yml")
     ap.add_argument("--exemptions", default="security/exemptions.yml")
@@ -276,6 +302,9 @@ def main(argv=None):
 
     policy = load_yaml(args.policy)
     exemptions = load_yaml(args.exemptions)
+    if args.command == "filter-sarif":
+        filter_sarif(args.tool, args.src, args.dst, exemptions)
+        return 0
     if args.command == "check":
         if not args.tool:
             ap.error("check requiert --tool")

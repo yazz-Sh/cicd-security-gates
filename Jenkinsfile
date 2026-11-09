@@ -47,6 +47,7 @@ pipeline {
                 sh '''
                     gitleaks git --redact --no-banner --report-format json  --report-path reports/gitleaks.json  . || true
                     gitleaks git --redact --no-banner --report-format sarif --report-path reports/gitleaks.sarif . || true
+                    $GATE filter-sarif --tool gitleaks --src reports/gitleaks.sarif --dst reports/gitleaks-sonar.sarif
                 '''
                 catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                     sh '$GATE check --tool gitleaks'

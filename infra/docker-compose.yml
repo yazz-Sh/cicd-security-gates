@@ -24,6 +24,10 @@ services:
     image: devsecops/jenkins:local
     container_name: jenkins
     depends_on: [sonarqube, mailpit]
+    # Docker Desktop expose le socket en root:root (0660) -> on ajoute le groupe 0.
+    # LIMITE ASSUMEE DU LABO : acces au socket = equivalent root sur l'hote.
+    # En production : agents de build ephemeres, Docker rootless ou Kaniko/BuildKit.
+    group_add: ["0"]
     environment:
       JAVA_OPTS: >-
         -Djenkins.install.runSetupWizard=false
