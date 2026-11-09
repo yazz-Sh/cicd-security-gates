@@ -8,6 +8,7 @@ repos:
     hooks:
       - id: detect-private-key        # cles privees PEM/SSH
       - id: check-added-large-files   # gros binaires / dumps
+        exclude: ^docs/export/        # livrables PDF/Word generes volontairement
       - id: check-yaml
         args: [--unsafe]              # Jenkins/K8s : syntaxe seulement
 
