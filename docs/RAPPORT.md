@@ -390,16 +390,54 @@ scripts/scan-local.ps1      exécution ciblée en local avant push
 docs/                       rapport, procédure de dérogation, préparation à l'oral
 ```
 
-### 13.3 Captures d'écran à joindre
+### 13.3 Captures d'écran
 
-1. Jenkins : vue des 3 jobs (vert / rouge / vert)
-2. Jenkins : *Stage View* du job 2 (stages de scan en rouge, production non exécutée)
-3. Jenkins : *Stage View* du job 3 (tout vert jusqu'à `deploy_production`)
-4. Rapport « Quality gate » HTML du job 2 (verdict BLOCK + détail)
-5. Rapport « Quality gate » HTML du job 3 (verdict PASS + 4 dérogations + courbe de tendance)
-6. Rapport ZAP du job 2 : *Remote OS Command Injection*
-7. Rapport Trivy image du job 2
-8. SonarQube : les deux projets (note E / note A, quality gate failed / passed)
-9. Mailpit : e-mails `[BLOQUE]` et `[OK]`
-10. Terminal : commit bloqué par le hook pre-commit (secret détecté)
-11. VS Code : alerte SonarLint/Semgrep sur l'injection SQL de la branche `vulnerable`
+Captures prises sur la plateforme en fonctionnement (dossier `docs/captures/`).
+
+**1. Jenkins : les 3 jobs** (vert / rouge / vert)
+
+![Jenkins - 3 jobs](captures/01-jenkins-3-jobs.png)
+
+**2. Stage View du job 2** : stages de scan en rouge, production jamais atteinte
+
+![Stage View - vulnerable](captures/02-jenkins-stageview-vulnerable.png)
+
+**3. Stage View du job 3** : tout vert jusqu'à `deploy_production`
+
+![Stage View - main](captures/03-jenkins-stageview-main.png)
+
+**4. Rapport du quality gate, job 2** : verdict BLOCK, synthèse par outil
+
+![Gate BLOCK](captures/04-gate-vulnerable-BLOCK.png)
+
+**5. Rapport du quality gate, job 3** : verdict PASS, dérogations et tendance
+
+![Gate PASS](captures/05-gate-main-PASS.png)
+
+**6. Rapport ZAP, job 2** : *Remote OS Command Injection* (High)
+
+![ZAP](captures/06-zap-vulnerable.png)
+
+**7. Rapport Trivy image, job 2**
+
+![Trivy image](captures/07-trivy-image-vulnerable.png)
+
+**8. SonarQube** : les deux projets (note E / note A), puis le détail de chacun
+
+![SonarQube - projets](captures/08-sonarqube-projets.png)
+![SonarQube - vulnerable](captures/08b-sonarqube-vulnerable.png)
+![SonarQube - main](captures/08c-sonarqube-main.png)
+
+**9. Mailpit** : e-mails `[BLOQUE]` et `[OK]`
+
+![Mailpit](captures/09-mailpit-alertes.png)
+
+**10. Poste développeur** : commit refusé par le hook pre-commit (Gitleaks, 2 secrets)
+
+![pre-commit](captures/10-precommit-secret-bloque.png)
+
+**11. Poste développeur** : Semgrep en local sur la branche `vulnerable` (injection SQL trouvée par la règle personnalisée)
+
+![Semgrep local](captures/11-semgrep-local-vulnerable.png)
+
+Les captures 10 et 11 sont la sortie réelle des commandes, mise en forme en image.
