@@ -1,4 +1,51 @@
 # Registre des derogations (procedure : docs/PROCEDURE_DEROGATION.md)
 # Une derogation sans approbateur, justification ou date d'expiration est REFUSEE par le gate.
 # Une derogation expiree redevient automatiquement bloquante.
-exemptions: []
+# "location" est compare au champ Emplacement du resultat (sous-chaine).
+exemptions:
+  - id: EXC-2026-001
+    tool: gitleaks
+    rule: aws-access-token
+    location: "app/facturation/config.py:4 (commit e006ce61"
+    justification: >-
+      Vrai positif HISTORIQUE. Cle AWS AKIA... commitee en v1.0 puis supprimee du code (commit 0187da1).
+      La cle a ete REVOQUEE dans IAM le 2026-11-09 : elle n'a plus de valeur. L'historique Git
+      n'est pas reecrit (depot partage) ; reecriture planifiee avec git filter-repo.
+    approved_by: "RSSI - Y. Shili"
+    ticket: SEC-101
+    created: 2026-11-09
+    expires: 2027-05-09
+
+  - id: EXC-2026-002
+    tool: gitleaks
+    rule: generic-api-key
+    location: "app/facturation/config.py:5 (commit e006ce61"
+    justification: >-
+      Vrai positif HISTORIQUE. Secret AWS associe a la cle EXC-2026-001, revoque le meme jour.
+    approved_by: "RSSI - Y. Shili"
+    ticket: SEC-101
+    created: 2026-11-09
+    expires: 2027-05-09
+
+  - id: EXC-2026-003
+    tool: gitleaks
+    rule: generic-api-key
+    location: "app/tests/test_api.py"
+    justification: >-
+      FAUX POSITIF. Mot de passe fictif utilise par un test unitaire pour verifier la politique
+      de longueur minimale ; ne donne acces a aucun systeme.
+    approved_by: "Lead dev - Y. Shili"
+    ticket: SEC-102
+    created: 2026-11-09
+    expires: 2027-02-09
+
+  - id: EXC-2026-004
+    tool: gitleaks
+    rule: generic-api-key
+    location: ".vscode/settings.json"
+    justification: >-
+      FAUX POSITIF. "projectKey" est l'identifiant public du projet SonarQube, pas un secret.
+    approved_by: "Lead dev - Y. Shili"
+    ticket: SEC-102
+    created: 2026-11-09
+    expires: 2027-02-09
