@@ -2,6 +2,8 @@
 #  - image de base recente, epinglee par empreinte (digest) et non par tag modifiable
 #  - multi-etapes : aucun outil de build dans l'image finale
 #  - utilisateur non-root 10001, HEALTHCHECK, aucun secret dans l'image
+#  - correctifs de securite OS appliques au build : l'image officielle peut avoir
+#    quelques jours de retard sur Debian (cas reel : CVE zlib detectees par Trivy)
 ARG BASE=python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
 FROM ${BASE} AS build
@@ -12,6 +14,8 @@ RUN pip install --prefix=/install -r requirements.txt
 
 FROM ${BASE}
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
 WORKDIR /app
 COPY --from=build /install /usr/local
