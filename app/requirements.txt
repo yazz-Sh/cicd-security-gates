@@ -1,6 +1,17 @@
-fastapi==0.115.0
-uvicorn==0.30.6
-requests==2.25.1
-urllib3==1.26.4
-pyjwt==2.3.0
-jinja2==3.1.2
+# Dependances epinglees (versions exactes, resolues le 2026-11-09).
+# CORRECTIF SCA : mise a jour de fastapi/starlette ; suppression de requests, urllib3,
+# pyjwt et jinja2, declares mais jamais utilises (surface d'attaque inutile).
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.16.0
+click==8.5.1
+fastapi==0.162.2
+h11==0.16.0
+idna==3.20
+opentelemetry-api==1.45.2
+pydantic==2.14.3
+pydantic_core==2.50.4
+starlette==1.10.0
+typing-inspection==0.4.5
+typing_extensions==4.16.0
+uvicorn==0.54.0

@@ -1,9 +1,16 @@
-"""Configuration de l'application."""
+"""Configuration de l'application.
 
-# --- Identifiants de production (a deplacer un jour...) ---
-AWS_ACCESS_KEY_ID = "AKIAQX4RL7TZ2MVBN6KD"
-AWS_SECRET_ACCESS_KEY = "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"
-DB_PASSWORD = "Sup3rS3cret!2026"
+CORRECTIF (secrets) : aucun secret dans le code. Les valeurs sont injectees a
+l'execution par variables d'environnement (en production : coffre Vault /
+External Secrets). Les anciennes cles AWS commitees ont ete REVOQUEES.
+"""
+import os
+import tempfile
+from pathlib import Path
 
-DATABASE_PATH = "/tmp/facturation.db"
-DEBUG = True
+AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "")
+AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+
+DATABASE_PATH = os.environ.get("DATABASE_PATH", str(Path(tempfile.gettempdir()) / "facturation.db"))
+DEBUG = os.environ.get("DEBUG", "false").lower() == "true"

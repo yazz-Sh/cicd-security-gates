@@ -39,5 +39,16 @@ def test_hello():
 
 
 def test_create_user():
-    r = client.post("/users", json={"name": "carol", "password": "Passw0rd!"})
+    r = client.post("/users", json={"name": "carol", "password": "Un-Mot-De-Passe-Long-2026"})
     assert r.status_code == 200 and r.json()["name"] == "carol"
+
+
+def test_import_json():
+    r = client.post("/invoices/import", headers=ALICE,
+                    json={"invoices": [{"customer": "Tunisair", "amount": 410.0}]})
+    assert r.json() == {"imported": 1}
+
+
+def test_resolve_localhost():
+    r = client.get("/admin/resolve", params={"host": "localhost"}, headers=ALICE)
+    assert r.status_code == 200 and r.json()["private"] is True

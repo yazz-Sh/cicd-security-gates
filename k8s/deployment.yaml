@@ -1,21 +1,47 @@
+# CORRECTIFS IaC (Checkov) : non-root, pas de privileges, FS en lecture seule,
+# capacites supprimees, ressources limitees, secrets depuis un Secret Kubernetes.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: facturation-api
+  namespace: facturation
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels: {app: facturation-api}
   template:
     metadata:
       labels: {app: facturation-api}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
       containers:
         - name: api
-          image: facturation-api:latest
+          # Image referencee par empreinte (digest) produite et signee par le pipeline
+          image: registry.local/facturation-api@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: Always
           ports: [{containerPort: 8000}]
           securityContext:
-            privileged: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          livenessProbe:
+            httpGet: {path: /health, port: 8000}
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
           env:
             - name: DB_PASSWORD
-              value: "Sup3rS3cret!2026"
+              valueFrom:
+                secretKeyRef: {name: facturation-secrets, key: db-password}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}
