@@ -1,0 +1,62 @@
+# Plateforme DevSecOps locale : Jenkins (CI), SonarQube (centralisation), Mailpit (notifications)
+# Lancement : voir infra/bootstrap.ps1
+name: devsecops
+
+services:
+  sonarqube:
+    image: sonarqube:community
+    container_name: sonarqube
+    environment:
+      # Docker Desktop/WSL2 : evite l'exigence vm.max_map_count d'Elasticsearch
+      SONAR_SEARCH_JAVAADDITIONALOPTS: "-Dnode.store.allow_mmap=false"
+      # Autorise le webhook vers le conteneur Jenkins (reseau Docker prive du labo)
+      SONAR_VALIDATEWEBHOOKS: "false"
+    ports:
+      - "9000:9000"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    networks: [devsecops]
+
+  jenkins:
+    build: ./jenkins
+    image: devsecops/jenkins:local
+    container_name: jenkins
+    depends_on: [sonarqube, mailpit]
+    environment:
+      JAVA_OPTS: >-
+        -Djenkins.install.runSetupWizard=false
+        -Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true
+        -Dhudson.model.DirectoryBrowserSupport.CSP=
+      CASC_JENKINS_CONFIG: /var/jenkins_home/casc.yaml
+      # Secrets injectes depuis infra/.env (non versionne) -> credentials Jenkins masques
+      JENKINS_ADMIN_PASSWORD: ${JENKINS_ADMIN_PASSWORD}
+      SONAR_TOKEN: ${SONAR_TOKEN}
+    ports:
+      - "8080:8080"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - ./jenkins/casc.yaml:/var/jenkins_home/casc.yaml:ro
+      # Le depot Git du projet, monte en lecture seule (simule le serveur Git)
+      - ..:/repo:ro
+      # Acces au moteur Docker de l'hote (build d'image, staging, ZAP)
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [devsecops]
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: mailpit
+    ports:
+      - "8025:8025"   # interface web : http://localhost:8025
+    networks: [devsecops]
+
+networks:
+  devsecops:
+    name: devsecops
+
+volumes:
+  jenkins_home:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:

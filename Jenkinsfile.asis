@@ -1,0 +1,42 @@
+// =============================================================================
+// ETAT "AS-IS" : pipeline DevOps d'origine, AVANT DevSecOps.
+// Il compile, teste, construit et deploie... sans AUCUN controle de securite.
+// Conserve volontairement pour l'analyse comparative as-is / to-be.
+// =============================================================================
+pipeline {
+    agent any
+
+    environment {
+        // FAIBLESSE W5 : secret en clair dans le pipeline (visible dans le code et les logs)
+        DB_PASSWORD = 'Sup3rS3cret!2026'
+    }
+
+    stages {
+        stage('checkout') {
+            steps { checkout scm }
+        }
+        stage('unit_tests') {
+            steps {
+                sh '''
+                    python3 -m venv .venv && . .venv/bin/activate
+                    pip install -q -r app/requirements.txt -r app/requirements-dev.txt
+                    cd app && pytest -q
+                '''
+            }
+        }
+        stage('build') {
+            // FAIBLESSE W3 : image construite depuis une base non epinglee, jamais scannee
+            steps { sh 'docker build -t facturation-api:asis-${BUILD_NUMBER} app' }
+        }
+        stage('deploy_production') {
+            // FAIBLESSE W6 : deploiement direct en production, sans validation ni staging
+            steps {
+                sh '''
+                    docker rm -f facturation-prod-asis || true
+                    docker run -d --name facturation-prod-asis --network devsecops -p 8090:8000 \
+                        -e DB_PASSWORD=$DB_PASSWORD facturation-api:asis-${BUILD_NUMBER}
+                '''
+            }
+        }
+    }
+}

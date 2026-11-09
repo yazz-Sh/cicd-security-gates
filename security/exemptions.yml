@@ -1,0 +1,4 @@
+# Registre des derogations (procedure : docs/PROCEDURE_DEROGATION.md)
+# Une derogation sans approbateur, justification ou date d'expiration est REFUSEE par le gate.
+# Une derogation expiree redevient automatiquement bloquante.
+exemptions: []

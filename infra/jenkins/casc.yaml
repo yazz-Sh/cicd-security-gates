@@ -1,0 +1,70 @@
+# Jenkins Configuration as Code : toute la configuration est versionnee et relue.
+jenkins:
+  systemMessage: "Plateforme DevSecOps - facturation-api (configuration as code)"
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - string:
+              scope: GLOBAL
+              id: "sonar-token"
+              secret: "${SONAR_TOKEN}"
+              description: "Jeton d'analyse SonarQube (masque dans les logs)"
+
+security:
+  globalJobDslSecurityConfiguration:
+    useScriptSecurity: false
+
+unclassified:
+  location:
+    url: "http://localhost:8080/"
+    adminAddress: "jenkins@devsecops.local"
+  mailer:
+    smtpHost: "mailpit"
+    smtpPort: "1025"
+    defaultSuffix: "@devsecops.local"
+  sonarGlobalConfiguration:
+    buildWrapperEnabled: true
+    installations:
+      - name: "SonarQube"
+        serverUrl: "http://sonarqube:9000"
+        credentialsId: "sonar-token"
+
+jobs:
+  - script: |
+      def mk = { String name, String branch, String file, String desc ->
+        pipelineJob(name) {
+          description(desc)
+          definition {
+            cpsScm {
+              scm {
+                git {
+                  remote { url('file:///repo') }
+                  branch(branch)
+                }
+              }
+              scriptPath(file)
+              lightweight(false)
+            }
+          }
+          // Declenchement automatique a chaque commit (scrutation du depot chaque minute)
+          properties { pipelineTriggers { triggers { pollSCM { scmpoll_spec('* * * * *') } } } }
+        }
+      }
+      mk('1-as-is-pipeline', '*/vulnerable', 'Jenkinsfile.asis',
+         'ETAT AS-IS : pipeline DevOps d origine, sans aucun controle de securite.')
+      mk('2-devsecops-vulnerable', '*/vulnerable', 'Jenkinsfile',
+         'ETAT TO-BE sur le code vulnerable : le pipeline doit BLOQUER.')
+      mk('3-devsecops-main', '*/main', 'Jenkinsfile',
+         'ETAT TO-BE sur le code corrige : le pipeline doit PASSER et deployer.')

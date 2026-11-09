@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: facturation-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: facturation-api}
+  template:
+    metadata:
+      labels: {app: facturation-api}
+    spec:
+      containers:
+        - name: api
+          image: facturation-api:latest
+          ports: [{containerPort: 8000}]
+          securityContext:
+            privileged: true
+          env:
+            - name: DB_PASSWORD
+              value: "Sup3rS3cret!2026"

@@ -1,0 +1,29 @@
+# Politique de quality gates de securite (justification detaillee : docs/RAPPORT.md, section 5)
+#   block : severites qui FONT ECHOUER le build
+#   warn  : severites remontees sans bloquer (visibles dans les rapports et l'historique)
+# Correspondance CVSS v3 : CRITICAL >= 9.0 | HIGH 7.0-8.9 | MEDIUM 4.0-6.9 | LOW 0.1-3.9
+version: 1
+
+# "Absence = echec" : un scanner qui n'a pas produit son rapport bloque le build
+required_reports: [gitleaks, semgrep, bandit, trivy-fs, trivy-image, zap, sonarqube]
+
+tools:
+  gitleaks:            # un secret commite est compromis, quelle que soit sa "severite"
+    block: [CRITICAL, HIGH, MEDIUM, LOW, INFO, UNKNOWN]
+  semgrep:             # SAST : regles ERROR (injection, deserialisation, RCE...)
+    block: [CRITICAL, HIGH]
+  bandit:              # SAST Python : severite HIGH avec une confiance au moins MEDIUM
+    block: [HIGH]
+    min_confidence_to_block: MEDIUM
+  trivy-fs:            # SCA : on ne bloque que ce que l'equipe PEUT corriger
+    block: [CRITICAL, HIGH]
+    block_only_if_fix_available: true
+  trivy-image:         # image Docker : meme regle (base OS + paquets applicatifs)
+    block: [CRITICAL, HIGH]
+    block_only_if_fix_available: true
+  zap:                 # DAST : alertes de risque eleve confirmees en staging
+    block: [HIGH]
+  checkov:             # IaC : mode observation (non bloquant) avant durcissement
+    block: []
+  sonarqube:           # Quality Gate SonarQube "DevSecOps" (security rating A exige)
+    block: [HIGH]

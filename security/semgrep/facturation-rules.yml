@@ -1,0 +1,25 @@
+# Regles Semgrep personnalisees (capitalisation : chaque faille trouvee devient une regle)
+rules:
+  - id: facturation-sql-fstring
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Requete SQL construite par f-string/concatenation : injection SQL (OWASP A05:2025 Injection, CWE-89).
+      Utiliser une requete parametree : conn.execute("... WHERE x = ?", (valeur,)).
+    metadata: {cwe: "CWE-89", owasp: "A05:2025 - Injection"}
+    patterns:
+      - pattern-either:
+          - pattern: $CONN.execute(f"...", ...)
+          - pattern: $CONN.execute("..." + $X, ...)
+          - pattern: |
+              $Q = f"..."
+              ...
+              $CONN.execute($Q, ...)
+  - id: facturation-pickle-untrusted
+    languages: [python]
+    severity: ERROR
+    message: >-
+      pickle.loads sur une donnee externe = execution de code arbitraire (CWE-502).
+      Utiliser json + validation Pydantic.
+    metadata: {cwe: "CWE-502", owasp: "A08:2025 - Software or Data Integrity Failures"}
+    pattern: pickle.loads(...)

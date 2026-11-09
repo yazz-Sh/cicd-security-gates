@@ -1,0 +1,13 @@
+{
+  // SonarLint en "connected mode" : memes regles et meme quality profile que SonarQube en CI
+  "sonarlint.connectedMode.connections.sonarqube": [
+    { "connectionId": "local-sonarqube", "serverUrl": "http://localhost:9000" }
+  ],
+  "sonarlint.connectedMode.project": {
+    "connectionId": "local-sonarqube",
+    "projectKey": "facturation-api-3-devsecops-main"
+  },
+  // Semgrep dans l'IDE : memes regles personnalisees que la CI
+  "semgrep.scan.configuration": ["p/python", "security/semgrep"],
+  "files.trimTrailingWhitespace": true
+}

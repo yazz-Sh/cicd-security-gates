@@ -1,0 +1,10 @@
+{
+  // Extensions de securite recommandees : VS Code les propose a l'ouverture du projet
+  "recommendations": [
+    "SonarSource.sonarlint-vscode",
+    "semgrep.semgrep",
+    "ms-python.python",
+    "ms-azuretools.vscode-docker",
+    "redhat.vscode-yaml"
+  ]
+}
