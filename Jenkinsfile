@@ -11,7 +11,7 @@
 //     mais les scans suivants continuent pour donner une vision complete ;
 //   - le stage final security_gate interdit le deploiement en production.
 // Execution : automatique a chaque commit (scrutation SCM), ou ciblee en local
-// (voir docs/EXECUTION_LOCALE.md).
+// avant push avec scripts/scan-local.ps1 (memes outils, meme politique).
 // =============================================================================
 pipeline {
     agent any
