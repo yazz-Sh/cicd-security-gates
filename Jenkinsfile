@@ -30,6 +30,8 @@ pipeline {
         HISTORY_FILE   = "/var/jenkins_home/security-history/${env.JOB_BASE_NAME}.jsonl"
         TRIVY_CACHE_DIR = '/var/jenkins_home/.cache/trivy'
         SEMGREP_SEND_METRICS = 'off'
+        // ZAP epingle par version + digest (meme image que le workflow GitHub Actions)
+        ZAP_IMAGE      = 'zaproxy/zap-stable:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af'
     }
 
     stages {
@@ -185,7 +187,7 @@ pipeline {
             steps {
                 // ZAP scanne l'API a partir de sa definition OpenAPI (scan actif, environnement staging uniquement)
                 sh '''
-                    docker run --rm --network devsecops --volumes-from jenkins -u zap zaproxy/zap-stable bash -c "\
+                    docker run --rm --network devsecops --volumes-from jenkins -u zap $ZAP_IMAGE bash -c "\
                         mkdir -p /zap/wrk && cd /zap/wrk && \
                         zap-api-scan.py -t http://$STAGING:8000/openapi.json -f openapi -J zap.json -r zap.html -I ; \
                         cp /zap/wrk/zap.json /zap/wrk/zap.html $WORKSPACE/reports/" || true

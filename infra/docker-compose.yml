@@ -4,7 +4,7 @@ name: devsecops
 
 services:
   sonarqube:
-    image: sonarqube:community
+    image: sonarqube:community@sha256:1ce197471f5f2bac347694a336862fd2c23e9f57c6edb46acebbfbe70f2c7d9c   # tag + digest
     container_name: sonarqube
     environment:
       # Docker Desktop/WSL2 : evite l'exigence vm.max_map_count d'Elasticsearch
@@ -49,7 +49,7 @@ services:
     networks: [devsecops]
 
   mailpit:
-    image: axllent/mailpit:latest
+    image: axllent/mailpit:latest@sha256:aef2aacc11f075ec0fb6874275ee4a421e688e11a96ebb296134d1735c7761ce   # tag + digest
     container_name: mailpit
     ports:
       - "8025:8025"   # interface web : http://localhost:8025

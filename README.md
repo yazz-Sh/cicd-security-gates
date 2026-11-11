@@ -1,5 +1,7 @@
 # facturation-api — pipeline CI/CD DevSecOps « shift-left »
 
+[![devsecops](https://github.com/yazz-Sh/shift-left-cicd-security/actions/workflows/devsecops.yml/badge.svg?branch=main)](https://github.com/yazz-Sh/shift-left-cicd-security/actions/workflows/devsecops.yml)
+
 Pipeline Jenkins qui intègre **secrets, SAST, SCA, scan d'image, DAST, IaC et SBOM**, avec des
 **quality gates** qui bloquent automatiquement toute vulnérabilité critique avant la production.
 Le projet est démontré sur deux versions de la même API : le code vulnérable d'origine est bloqué,
@@ -31,6 +33,11 @@ flowchart LR
     G -- PASS --> P[deploy_production]
     G -- BLOCK --> X[échec + e-mail]
 ```
+
+Le même pipeline tourne aussi sur **GitHub Actions** à chaque push et pull request
+(`.github/workflows/devsecops.yml`) : mêmes outils, même politique, résultats dans
+*Security → Code scanning*, et sur `main` publication de l'image signée par cosign sur GHCR.
+SonarQube, local, reste évalué par Jenkins.
 
 ## Démarrage
 

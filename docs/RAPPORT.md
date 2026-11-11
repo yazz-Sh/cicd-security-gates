@@ -109,6 +109,11 @@ Le fichier `.vscode/extensions.json` fait proposer automatiquement à chaque dé
 Le *connected mode* de SonarLint (`.vscode/settings.json`) garantit qu'un développeur voit dans
 l'IDE **exactement** ce que la CI lui reprochera, avec l'explication et le correctif proposé.
 
+**ESLint** (cité par la consigne) n'est **pas applicable** : `facturation-api` est écrit
+uniquement en Python, sans JavaScript ni TypeScript. Son rôle est tenu par **Bandit** (IDE,
+pre-commit et CI) et par les règles Python de **Semgrep** et **SonarLint**. Sur un projet avec un
+front-end JS/TS, on ajouterait `eslint-plugin-security` au même hook pre-commit.
+
 ### 4.2 Hooks pre-commit
 
 `.pre-commit-config.yaml` bloque le commit **sur le poste**, avant qu'il ne quitte la machine :
@@ -182,13 +187,18 @@ flowchart LR
 | SAST + centralisation | **SonarQube** Community Build | 26.11 | tableau de bord unique, quality gate, historique ; importe les autres rapports |
 | SCA | **Trivy** (fs) | 0.75.0 | base de vulnérabilités à jour, indique la **version corrigée** |
 | Scan d'image | **Trivy** (image) | 0.75.0 | même outil : paquets OS **et** applicatifs de l'image |
-| DAST | **OWASP ZAP** (API scan) | stable | scan **actif** guidé par la définition OpenAPI de l'API |
+| DAST | **OWASP ZAP** (API scan) | 2.17.0 | scan **actif** guidé par la définition OpenAPI de l'API |
 | IaC | **Checkov** | 3.4.3 | Dockerfile + Kubernetes, plus de 1 000 règles |
 | SBOM | **Syft** | 1.55.0 | CycloneDX (format exigé par le Cyber Resilience Act) |
 
-Tous les outils sont installés dans l'image Jenkins **en version épinglée** ; l'archive de Trivy
-est en plus **vérifiée par checksum**. Les outils de sécurité sont eux-mêmes une cible
-(compromission des tags de l'action GitHub Trivy en mars 2026).
+Tous les outils sont installés dans l'image Jenkins **en version épinglée** : version exacte pour
+les outils Python (`pip install semgrep==1.184.0`…), **SHA-256 vérifié** pour chaque binaire
+téléchargé (Gitleaks, Trivy, Syft, SonarScanner), et **tag + empreinte (digest)** pour les images
+Docker (Jenkins, ZAP, SonarQube, Mailpit). Les empreintes attendues sont écrites dans le dépôt et
+non relues depuis le site de l'éditeur : un attaquant qui remplace une archive peut aussi
+remplacer le fichier de checksums publié à côté. Les outils de sécurité sont eux-mêmes une cible
+(compromission des tags de l'action GitHub Trivy en mars 2026). Le workflow GitHub Actions
+(§ 5.4) utilise exactement les mêmes versions et empreintes.
 
 ### 5.3 Stages du Jenkinsfile
 
@@ -215,6 +225,33 @@ en production**.
 
 **Déclenchement.** Automatique à **chaque commit** (scrutation du dépôt chaque minute par Jenkins),
 sans intervention manuelle. Les builds de ce rapport portent la cause *« Started by an SCM change »*.
+
+### 5.4 Le même pipeline sur GitHub Actions (dépôt rendu)
+
+Jenkins tourne sur le poste du laboratoire et lit le dépôt local : un push sur GitHub ne le
+déclenche pas. Pour que **le dépôt rendu** applique lui aussi les contrôles à **chaque push et
+chaque pull request**, `.github/workflows/devsecops.yml` reproduit le Jenkinsfile :
+
+| Job GitHub Actions | Équivalent Jenkins | Remarque |
+|--------------------|--------------------|----------|
+| `secrets_scan`, `sast`, `unit_tests`, `scan_dependencies`, `iac_scan` | mêmes stages | exécutés **en parallèle** |
+| `docker_scan` | `build` + `docker_scan` | l'image est transmise au job suivant |
+| `dast` | `deploy_staging` + `dast` | staging sur un réseau Docker isolé du runner |
+| `security_gate` | `security_gate` | même `gate.py`, même `policy.yml`, mêmes dérogations |
+| `publish_image` | `deploy_production` | `main` + verdict PASS uniquement : publication sur GHCR |
+
+- **Même décision** : le verdict est calculé par le même script et la même politique ; seul
+  SonarQube, injoignable depuis GitHub, reste évalué dans Jenkins.
+- **Centralisation** : les SARIF (Gitleaks filtré des dérogations, Semgrep, Bandit, Trivy)
+  apparaissent dans l'onglet **Security → Code scanning** ; les rapports JSON/HTML sont des
+  artefacts du run ; le verdict s'affiche dans le résumé du run.
+- **Blocage effectif** : une règle de protection de `main` rend le check `security_gate`
+  **obligatoire** : une pull request bloquée ne peut pas être fusionnée.
+- **Chaîne d'approvisionnement** : sur `main`, l'image validée est publiée sur GHCR avec SBOM et
+  provenance SLSA, **signée par cosign en mode *keyless*** (identité OIDC du workflow, aucune clé
+  à stocker), puis la signature est **vérifiée** dans le même job.
+- **Durcissement du workflow** : actions tierces épinglées par SHA de commit, permissions
+  minimales par job, jeton non conservé après le checkout ; vérifié avec `actionlint` et `zizmor`.
 
 ## 6. Quality gates : seuils de blocage et justification
 
@@ -350,11 +387,14 @@ résultats étaient de vrais faux positifs (EXC-2026-003/004).
 - SonarQube Community n'analyse pas les flux de données (*taint analysis*) en Python. Semgrep
   compense ce manque grâce aux règles personnalisées.
 - 192 CVE de l'image finale sans correctif disponible restent en avertissement : il faut les suivre.
-- Le dépôt Git est local (scrutation chaque minute). Sur GitLab ou GitHub, un webhook déclencherait
-  le build instantanément.
+- Jenkins lit le dépôt local (scrutation chaque minute). Le dépôt GitHub est couvert par le
+  workflow GitHub Actions (§ 5.4), mais SonarQube n'y est pas joignable : son quality gate n'est
+  appliqué que par Jenkins.
+- Les plugins Jenkins (`plugins.txt`) ne sont pas encore épinglés par version.
 
 **Axes d'amélioration (feuille de route) :**
-1. **Signature d'image** (cosign) et **vérification à l'admission** Kubernetes (Kyverno).
+1. ~~Signature d'image~~ (cosign, **réalisé** dans le workflow GitHub Actions) ; reste la
+   **vérification à l'admission** Kubernetes (Kyverno) et le digest réel dans `k8s/deployment.yaml`.
 2. **Vault** pour les secrets, **OIDC** pour supprimer les identifiants statiques.
 3. **Dependency-Track** : surveillance continue du SBOM (nouvelle CVE → ticket automatique avec SLA).
 4. Checkov **bloquant** après la phase d'observation ; image de base **distroless** ou Chainguard.

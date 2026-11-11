@@ -1,0 +1,440 @@
+# =============================================================================
+# Pipeline DevSecOps "shift-left" de facturation-api - version GitHub Actions
+#
+# Reproduit le Jenkinsfile (memes stages, memes outils et versions, meme politique
+# security/policy.yml + security/exemptions.yml appliquee par security/gate.py),
+# mais declenche par GitHub a CHAQUE push et CHAQUE pull request, sans action manuelle.
+#
+#   secrets_scan  sast  unit_tests  scan_dependencies  iac_scan  docker_scan -> dast
+#          \_______\_______\_____________\_______________\___________\________/
+#                                       security_gate  (verdict PASS / BLOCK)
+#                                             |
+#                                   publish_image (main + PASS uniquement)
+#                                   GHCR, signature cosign, SBOM + provenance SLSA
+#
+# Difference avec Jenkins : SonarQube tourne sur le poste du labo, injoignable depuis
+# GitHub. L'analyse SonarQube reste donc dans Jenkins ; ici le gate ne l'exige pas.
+#
+# Durcissement du workflow lui-meme :
+#  - actions tierces epinglees par SHA de commit (un tag peut etre deplace : cf. trivy-action 2026)
+#  - binaires telecharges avec SHA-256 verifie (memes valeurs que infra/jenkins/Dockerfile)
+#  - permissions minimales par job, jeton GitHub non conserve dans .git (persist-credentials: false)
+#  - aucun secret statique : la publication utilise le GITHUB_TOKEN ephemere et la signature
+#    cosign "keyless" (identite OIDC du workflow)
+# =============================================================================
+name: devsecops
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: devsecops-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+  TRIVY_VERSION: "0.75.0"
+  TRIVY_SHA256: "c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f"
+  SYFT_VERSION: "1.55.0"
+  SYFT_SHA256: "bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d"
+  SEMGREP_VERSION: "1.184.0"
+  BANDIT_VERSION: "1.9.4"
+  CHECKOV_VERSION: "3.4.3"
+  PYYAML_VERSION: "6.0.3"
+  ZAP_IMAGE: "zaproxy/zap-stable:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af"
+  COSIGN_VERSION: "v3.1.4"
+  SEMGREP_SEND_METRICS: "off"
+  PYTHON_VERSION: "3.12"
+  IMAGE: "facturation-api:ci"
+
+jobs:
+  # --------------------------------------------------------------- 1. secrets
+  secrets_scan:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0              # tout l'historique : un secret supprime reste dans Git
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Installer Gitleaks (SHA-256 verifie) et PyYAML
+        run: |
+          curl -fsSL -o /tmp/gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gl.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/gl.tgz -C /usr/local/bin gitleaks
+          pip install -q "pyyaml==${PYYAML_VERSION}"
+      - name: Gitleaks (historique complet)
+        run: |
+          mkdir -p reports
+          gitleaks git --redact --no-banner --report-format json  --report-path reports/gitleaks.json  . || true
+          gitleaks git --redact --no-banner --report-format sarif --report-path reports/gitleaks.sarif . || true
+          # Code scanning ne recoit que les resultats NON couverts par une derogation active
+          python security/gate.py filter-sarif --tool gitleaks --src reports/gitleaks.sarif --dst reports/gitleaks-filtered.sarif
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: reports-secrets_scan
+          path: reports/
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        if: ${{ !cancelled() && hashFiles('reports/gitleaks-filtered.sarif') != '' }}
+        with:
+          sarif_file: reports/gitleaks-filtered.sarif
+          category: gitleaks
+      - name: Gate gitleaks
+        run: python security/gate.py check --tool gitleaks
+
+  # --------------------------------------------------------------- 2. SAST
+  sast:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Installer Semgrep et Bandit (versions exactes)
+        run: pip install -q "semgrep==${SEMGREP_VERSION}" "bandit[sarif]==${BANDIT_VERSION}" "pyyaml==${PYYAML_VERSION}"
+      - name: Semgrep (OWASP Top 10 + regles maison)
+        run: |
+          mkdir -p reports
+          semgrep scan --metrics=off --quiet \
+            --config p/python --config p/owasp-top-ten --config security/semgrep \
+            --json-output=reports/semgrep.json --sarif-output=reports/semgrep.sarif \
+            app/facturation || true
+      - name: Bandit
+        run: |
+          bandit -q -r app/facturation -f json  -o reports/bandit.json  || true
+          bandit -q -r app/facturation -f sarif -o reports/bandit.sarif || true
+          bandit -q -r app/facturation -f html  -o reports/bandit.html  || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: reports-sast
+          path: reports/
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        if: ${{ !cancelled() && hashFiles('reports/semgrep.sarif') != '' }}
+        with:
+          sarif_file: reports/semgrep.sarif
+          category: semgrep
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        if: ${{ !cancelled() && hashFiles('reports/bandit.sarif') != '' }}
+        with:
+          sarif_file: reports/bandit.sarif
+          category: bandit
+      - name: Gate semgrep et bandit
+        run: |
+          rc=0
+          python security/gate.py check --tool semgrep || rc=1
+          python security/gate.py check --tool bandit  || rc=1
+          exit $rc
+
+  # --------------------------------------------------------------- 3. tests
+  unit_tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Tests unitaires et couverture (>= 80 %)
+        run: |
+          mkdir -p reports
+          pip install -q -r app/requirements.txt -r app/requirements-dev.txt
+          cd app && pytest -q --junitxml=../reports/junit.xml \
+            --cov=facturation --cov-report=xml:../reports/coverage.xml --cov-fail-under=80
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: reports-unit_tests
+          path: reports/
+
+  # --------------------------------------------------------------- 4. SCA + SBOM source
+  scan_dependencies:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Installer Trivy et Syft (SHA-256 verifies)
+        run: |
+          cd /tmp
+          curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" | sha256sum -c -
+          sudo tar -xzf "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" -C /usr/local/bin trivy
+          curl -fsSL -o syft.tgz "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  syft.tgz" | sha256sum -c -
+          sudo tar -xzf syft.tgz -C /usr/local/bin syft
+          pip install -q "pyyaml==${PYYAML_VERSION}"
+      - name: Trivy fs (dependances) + SBOM CycloneDX
+        run: |
+          mkdir -p reports
+          trivy fs --quiet --scanners vuln --format json  -o reports/trivy-fs.json  app
+          trivy fs --quiet --scanners vuln --format sarif -o reports/trivy-fs.sarif app
+          syft dir:app -q -o cyclonedx-json=reports/sbom-source.cdx.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: reports-scan_dependencies
+          path: reports/
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        if: ${{ !cancelled() && hashFiles('reports/trivy-fs.sarif') != '' }}
+        with:
+          sarif_file: reports/trivy-fs.sarif
+          category: trivy-fs
+      - name: Gate trivy-fs
+        run: python security/gate.py check --tool trivy-fs
+
+  # --------------------------------------------------------------- 5. IaC (non bloquant)
+  iac_scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Checkov (Dockerfile + Kubernetes, mode observation)
+        run: |
+          pip install -q "checkov==${CHECKOV_VERSION}" "pyyaml==${PYYAML_VERSION}"
+          mkdir -p reports
+          checkov -d app -d k8s --framework dockerfile kubernetes --quiet --soft-fail \
+            -o json -o cli --output-file-path reports || true
+          python security/gate.py check --tool checkov || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: reports-iac_scan
+          path: reports/
+
+  # --------------------------------------------------------------- 6-7. build + scan d'image
+  docker_scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Installer Trivy et Syft (SHA-256 verifies)
+        run: |
+          cd /tmp
+          curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/trivy && tar -xzf "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" -C /tmp/trivy
+          sudo ln -sf /tmp/trivy/trivy /usr/local/bin/trivy
+          curl -fsSL -o syft.tgz "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  syft.tgz" | sha256sum -c -
+          sudo tar -xzf syft.tgz -C /usr/local/bin syft
+          pip install -q "pyyaml==${PYYAML_VERSION}"
+      - name: build
+        run: |
+          mkdir -p reports
+          docker build -t "$IMAGE" app
+          syft "docker:$IMAGE" -q -o cyclonedx-json=reports/sbom-image.cdx.json
+          docker save "$IMAGE" -o /tmp/image.tar
+      - name: Trivy image
+        run: |
+          trivy image --quiet --format json -o reports/trivy-image.json "$IMAGE"
+          trivy image --quiet --format template --template @/tmp/trivy/contrib/html.tpl \
+            -o reports/trivy-image.html "$IMAGE" || true
+      # L'image est transmise au job dast meme si le scan bloque : on veut un rapport complet
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image
+          path: /tmp/image.tar
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: reports-docker_scan
+          path: reports/
+      - name: Gate trivy-image
+        run: python security/gate.py check --tool trivy-image
+
+  # --------------------------------------------------------------- 8-9. staging + DAST
+  dast:
+    needs: docker_scan
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image
+          path: /tmp
+      - name: deploy_staging (reseau Docker isole)
+        run: |
+          docker load -i /tmp/image.tar
+          docker network create staging
+          # port publie sur 127.0.0.1 uniquement, pour le controle de sante depuis le runner
+          docker run -d --name staging --network staging -p 127.0.0.1:8000:8000 "$IMAGE"
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8000/health && exit 0
+            sleep 2
+          done
+          docker logs staging
+          echo "staging ne repond pas" && exit 1
+      - name: OWASP ZAP (scan actif guide par OpenAPI)
+        run: |
+          mkdir -p reports zap && chmod 777 zap
+          docker run --rm --network staging -v "$PWD/zap:/zap/wrk:rw" "$ZAP_IMAGE" \
+            zap-api-scan.py -t http://staging:8000/openapi.json -f openapi -J zap.json -r zap.html -I || true
+          cp zap/zap.json zap/zap.html reports/ || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: reports-dast
+          path: reports/
+      - name: Gate zap
+        run: |
+          pip install -q "pyyaml==${PYYAML_VERSION}"
+          python security/gate.py check --tool zap
+
+  # --------------------------------------------------------------- 10. decision
+  # Check a rendre OBLIGATOIRE dans Settings -> Branches (protection de main)
+  security_gate:
+    needs: [secrets_scan, sast, unit_tests, scan_dependencies, iac_scan, docker_scan, dast]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    env:
+      # resultat du job de tests passe par l'environnement (pas d'interpolation dans le script)
+      UNIT_TESTS_RESULT: ${{ needs.unit_tests.result }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: reports-*
+          path: reports
+          merge-multiple: true
+      - name: Politique CI (SonarQube evalue dans Jenkins uniquement)
+        run: |
+          pip install -q "pyyaml==${PYYAML_VERSION}"
+          python - <<'EOF'
+          import yaml
+          p = yaml.safe_load(open("security/policy.yml", encoding="utf-8"))
+          p["required_reports"] = [t for t in p["required_reports"] if t != "sonarqube"]
+          yaml.safe_dump(p, open("/tmp/policy-ci.yml", "w", encoding="utf-8"))
+          EOF
+      - name: security_gate
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+          JOB_NAME: ${{ github.workflow }} / ${{ github.ref_name }}
+          GIT_COMMIT: ${{ github.sha }}
+        run: |
+          rc=0
+          python security/gate.py evaluate --policy /tmp/policy-ci.yml || rc=$?
+          {
+            echo '## Quality gate de securite'
+            echo '```'
+            cat reports/gate-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Les tests unitaires sont aussi une condition de mise en production (comme dans Jenkins)
+          if [ "${UNIT_TESTS_RESULT}" != "success" ]; then
+            echo "Tests unitaires en echec : production interdite" | tee -a "$GITHUB_STEP_SUMMARY"
+            rc=1
+          fi
+          exit $rc
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: security-gate
+          path: |
+            reports/security-gate.html
+            reports/security-gate.json
+            reports/gate-summary.txt
+
+  # --------------------------------------------------------------- 11. publication signee
+  # Equivalent "production" cote GitHub : seule une image validee par le gate est publiee.
+  publish_image:
+    needs: security_gate
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write        # pousser sur GHCR avec le GITHUB_TOKEN ephemere
+      id-token: write        # signature cosign keyless (identite OIDC du workflow)
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Nom de l'image (GHCR exige des minuscules)
+        id: name
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/facturation-api" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build et push (SBOM + provenance SLSA attaches par BuildKit)
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: app
+          push: true
+          tags: |
+            ${{ steps.name.outputs.image }}:${{ github.sha }}
+            ${{ steps.name.outputs.image }}:main
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          sbom: true
+          provenance: mode=max
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+      - name: Signer puis verifier la signature (par digest, jamais par tag)
+        env:
+          REF: ${{ steps.name.outputs.image }}@${{ steps.push.outputs.digest }}
+        run: |
+          cosign sign --yes "$REF"
+          cosign verify "$REF" \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/devsecops.yml@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+          {
+            echo '## Image publiee et signee'
+            echo "\`$REF\`"
+            echo
+            echo 'Verification par un tiers :'
+            echo '```'
+            echo "cosign verify $REF \\"
+            echo "  --certificate-identity https://github.com/${GITHUB_REPOSITORY}/.github/workflows/devsecops.yml@refs/heads/main \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

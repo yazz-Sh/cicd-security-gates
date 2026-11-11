@@ -111,6 +111,11 @@ these flaws to production. That is exactly the problem to solve.
 SonarLint connected mode (`.vscode/settings.json`) means the developer sees in the IDE **exactly**
 what the CI will flag, with the explanation and the suggested fix.
 
+**ESLint** (named in the brief) does **not apply**: `facturation-api` is pure Python, with no
+JavaScript or TypeScript. Its role is filled by **Bandit** (IDE, pre-commit and CI) and the Python
+rules of **Semgrep** and **SonarLint**. A project with a JS/TS front end would add
+`eslint-plugin-security` to the same pre-commit hook.
+
 ### 4.2 Pre-commit hooks
 
 `.pre-commit-config.yaml` blocks the commit **on the workstation**, before code leaves the machine:
@@ -183,13 +188,17 @@ flowchart LR
 | SAST + central dashboard | **SonarQube** Community Build | 26.11 | one dashboard, quality gate, history; imports the other reports |
 | SCA | **Trivy** (fs) | 0.75.0 | up-to-date vulnerability DB, reports the **fixed version** |
 | Image scan | **Trivy** (image) | 0.75.0 | same tool: OS **and** application packages in the image |
-| DAST | **OWASP ZAP** (API scan) | stable | **active** scan driven by the API's OpenAPI definition |
+| DAST | **OWASP ZAP** (API scan) | 2.17.0 | **active** scan driven by the API's OpenAPI definition |
 | IaC | **Checkov** | 3.4.3 | Dockerfile + Kubernetes, over 1,000 rules |
 | SBOM | **Syft** | 1.55.0 | CycloneDX (the format expected by the Cyber Resilience Act) |
 
-All tools are installed in the Jenkins image **at pinned versions**; the Trivy archive is also
-**checksum-verified**. Security tools are themselves targets (the Trivy GitHub Action tags were
-compromised in March 2026).
+All tools are installed in the Jenkins image **at pinned versions**: exact versions for the
+Python tools (`pip install semgrep==1.184.0`…), a **verified SHA-256** for every downloaded binary
+(Gitleaks, Trivy, Syft, SonarScanner), and **tag + digest** for the Docker images (Jenkins, ZAP,
+SonarQube, Mailpit). The expected hashes are written in the repository rather than read from the
+vendor's site: an attacker who replaces an archive can also replace the checksum file next to it.
+Security tools are themselves targets (the Trivy GitHub Action tags were compromised in March
+2026). The GitHub Actions workflow (§ 5.4) uses exactly the same versions and hashes.
 
 ### 5.3 Jenkinsfile stages
 
@@ -215,6 +224,33 @@ decision and **prevents the production deploy**.
 
 **Trigger.** Automatic on **every commit** (Jenkins polls the repository every minute), with no
 manual step. The builds in this report show the cause *"Started by an SCM change"*.
+
+### 5.4 The same pipeline on GitHub Actions (submitted repository)
+
+Jenkins runs on the lab machine and reads the local repository, so a push to GitHub does not
+trigger it. So that **the submitted repository** also runs the checks on **every push and every
+pull request**, `.github/workflows/devsecops.yml` mirrors the Jenkinsfile:
+
+| GitHub Actions job | Jenkins equivalent | Note |
+|--------------------|--------------------|------|
+| `secrets_scan`, `sast`, `unit_tests`, `scan_dependencies`, `iac_scan` | same stages | run **in parallel** |
+| `docker_scan` | `build` + `docker_scan` | the image is passed to the next job |
+| `dast` | `deploy_staging` + `dast` | staging on an isolated Docker network on the runner |
+| `security_gate` | `security_gate` | same `gate.py`, same `policy.yml`, same exemptions |
+| `publish_image` | `deploy_production` | `main` + PASS only: published to GHCR |
+
+- **Same decision**: the verdict comes from the same script and policy; only SonarQube, which
+  GitHub cannot reach, is still evaluated in Jenkins.
+- **Centralisation**: the SARIF files (Gitleaks minus exemptions, Semgrep, Bandit, Trivy) appear
+  under **Security → Code scanning**; JSON/HTML reports are run artifacts; the verdict is shown in
+  the run summary.
+- **Real blocking**: a branch protection rule on `main` makes the `security_gate` check
+  **required**, so a blocked pull request cannot be merged.
+- **Supply chain**: on `main`, the approved image is pushed to GHCR with an SBOM and SLSA
+  provenance, **signed by cosign in keyless mode** (the workflow's OIDC identity, no key to
+  store), and the signature is **verified** in the same job.
+- **Workflow hardening**: third-party actions pinned by commit SHA, least-privilege permissions
+  per job, token not kept after checkout; checked with `actionlint` and `zizmor`.
 
 ## 6. Quality gates: blocking thresholds and rationale
 
@@ -349,11 +385,14 @@ false positives (EXC-2026-003/004).
 - SonarQube Community does not do data-flow (taint) analysis for Python. Semgrep's custom rules
   fill that gap.
 - 192 CVEs in the final image have no fix yet and stay as warnings: they must be tracked.
-- The Git repository is local (polled every minute). On GitLab or GitHub, a webhook would trigger
-  the build instantly.
+- Jenkins reads the local repository (polled every minute). The GitHub repository is covered by
+  the GitHub Actions workflow (§ 5.4), but SonarQube is not reachable from it: its quality gate is
+  enforced by Jenkins only.
+- Jenkins plugins (`plugins.txt`) are not pinned to versions yet.
 
 **Roadmap:**
-1. **Image signing** (cosign) and **admission-time verification** in Kubernetes (Kyverno).
+1. ~~Image signing~~ (cosign, **done** in the GitHub Actions workflow); still to do:
+   **admission-time verification** in Kubernetes (Kyverno) and the real digest in `k8s/deployment.yaml`.
 2. **Vault** for secrets, **OIDC** to remove static credentials.
 3. **Dependency-Track**: continuous SBOM monitoring (new CVE → automatic ticket with an SLA).
 4. Make Checkov **blocking** after the observation period; **distroless** or Chainguard base image.

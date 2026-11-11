@@ -20,8 +20,10 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: api
-          # Image referencee par empreinte (digest) produite et signee par le pipeline
-          image: registry.local/facturation-api@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          # Image referencee par empreinte (digest), jamais par tag. Le digest ci-dessous est un
+          # GABARIT : remplacer par le digest publie et signe (cosign) par le job publish_image
+          # du workflow GitHub Actions (ghcr.io/yazz-sh/facturation-api@sha256:...).
+          image: ghcr.io/yazz-sh/facturation-api@sha256:0000000000000000000000000000000000000000000000000000000000000000
           imagePullPolicy: Always
           ports: [{containerPort: 8000}]
           securityContext:
